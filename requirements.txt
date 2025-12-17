@@ -4,3 +4,4 @@ google-search-results
 pytrends
 pandas
 matplotlib
+fpdf

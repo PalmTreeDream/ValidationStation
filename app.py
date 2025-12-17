@@ -5,82 +5,94 @@ from serpapi import GoogleSearch
 import pandas as pd
 import matplotlib.pyplot as plt
 import json
-
-
-@st.cache_data
-def get_trends(keyword):
-    try:
-        pt = TrendReq(hl='en-US', tz=360)
-        pt.build_payload([keyword], cat=0, timeframe='today 12-m')
-        data = pt.interest_over_time()
-        return data
-    except Exception as e:
-        # Pytrends is liable to fail with 429s, validation should be graceful
-        return pd.DataFrame() # Return empty to signal failure/skip
-
+from fpdf import FPDF
+import base64
 
 # Page Config
-st.set_page_config(page_title="Market Validation Engine", layout="wide")
+st.set_page_config(page_title="Market Validation Engine V2.0", layout="wide", page_icon="rocket")
 
-# Styling - Apple Clean
+# -----------------------------------------------------------------------------
+# 1. Styling & Visual Overhaul
+# -----------------------------------------------------------------------------
 st.markdown("""
 <style>
+    /* Global Settings */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    
     .stApp {
-        background-color: #FAFAFA;
+        background-color: #F8F9FA;
+        font-family: 'Inter', sans-serif;
         color: #1D1D1F;
-        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
     }
+    .card {
+        color: #1D1D1F;
+
+
+    /* Headlines */
+    h1, h2, h3 {
+        color: #1E293B;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+    }
+    
+    h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+    h2 { font-size: 1.8rem; margin-top: 1.5rem; margin-bottom: 1rem; }
+    h3 { font-size: 1.3rem; margin-bottom: 0.5rem; }
+
+    /* Cards */
+    .card {
+        background: white;
+        padding: 2rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        margin-bottom: 20px;
+        border: 1px solid #E2E8F0;
+    }
+    
+    /* Buttons */
     .stButton>button {
-        background-color: #0071E3;
+        background-color: #0F172A;
         color: white;
-        border-radius: 980px;
+        border-radius: 8px;
         border: none;
-        padding: 10px 24px;
+        padding: 0.6rem 1.2rem;
         font-weight: 500;
-        font-size: 14px;
-        transition: all 0.2s ease;
+        transition: all 0.2s;
     }
     .stButton>button:hover {
-        background-color: #0077ED;
-        transform: scale(1.02);
+        background-color: #334155;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
+    .stButton>button:active {
+        transform: scale(0.98);
+    }
+
+    /* Inputs */
     .stTextInput>div>div>input {
-        border-radius: 12px;
-        border: 1px solid #D2D2D7;
-        padding: 8px 12px;
+        border-radius: 8px;
+        border: 1px solid #CBD5E1;
+        padding: 10px 12px;
     }
-    h1 {
-        font-weight: 600;
-        letter-spacing: -0.003em;
-        font-size: 40px;
+
+    /* Alerts */
+    .stAlert {
+        border-radius: 8px;
+        border: 1px solid transparent;
     }
-    h2 {
-        font-weight: 600;
-        letter-spacing: -0.003em;
-        font-size: 28px;
-        margin-top: 30px;
-    }
-    h3 {
-        font-weight: 600;
-        font-size: 20px;
-    }
-    .css-1d391kg {
-        padding-top: 2rem;
-    }
+    
+    /* Utility */
+    hr { border-color: #E2E8F0; margin: 2rem 0; }
+    
 </style>
 """, unsafe_allow_html=True)
 
-# Sidebar
+# -----------------------------------------------------------------------------
+# 2. Smart Sidebar & Authentication
+# -----------------------------------------------------------------------------
 with st.sidebar:
     st.header("Configuration")
     
-    if st.button("Reset App", type="primary"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
-
-    
-    # Try to get keys from secrets first
+    # Smart Auth Logic
     if 'GEMINI_API_KEY' in st.secrets:
         gemini_key = st.secrets['GEMINI_API_KEY']
     else:
@@ -90,41 +102,61 @@ with st.sidebar:
         serpapi_key = st.secrets['SERPAPI_KEY']
     else:
         serpapi_key = st.text_input("SerpApi Key", type="password")
+    
+    # Auth Status Indicator
+    if 'GEMINI_API_KEY' in st.secrets and 'SERPAPI_KEY' in st.secrets:
+        st.success("✅ API Keys Loaded from Secrets")
 
     if gemini_key:
         genai.configure(api_key=gemini_key)
+        
+    # Model Selection Logic
+    @st.cache_data
+    def get_available_gemini_model():
+        try:
+            if not gemini_key: return "gemini-1.5-flash" # Fallback
+            
+            models = genai.list_models()
+            available = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
+            
+            # Priority: Flash -> Pro
+            for m in available:
+                if 'flash' in m.lower():
+                    return m
+            for m in available:
+                if 'pro' in m.lower():
+                    return m
+            
+            return available[0] if available else "gemini-1.5-flash"
+        except Exception as e:
+            print(f"Model Discovery Failed: {e}")
+            return "gemini-1.5-flash" # Safe fallback
 
-# Main Interface
-st.title("Market Validation Engine")
-st.markdown("---")
+    selected_model_name = get_available_gemini_model() if gemini_key else "gemini-1.5-flash"
 
-# Session State
-if 'niches' not in st.session_state:
-    st.session_state.niches = []
-if 'selected_niche' not in st.session_state:
-    st.session_state.selected_niche = None
+    if st.button("Reset App", type="primary"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+    
+    st.caption(f"🤖 Using AI Model: {selected_model_name}")
 
+# -----------------------------------------------------------------------------
+# Helper Functions
+# -----------------------------------------------------------------------------
+@st.cache_data
+def get_trends(keyword):
+    try:
+        pt = TrendReq(hl='en-US', tz=360)
+        pt.build_payload([keyword], cat=0, timeframe='today 12-m')
+        data = pt.interest_over_time()
+        return data
+    except Exception:
+        return pd.DataFrame()
 
-
-# Session State Initialization
-if 'niches_l1' not in st.session_state:
-    st.session_state.niches_l1 = []
-if 'niches_l2' not in st.session_state:
-    st.session_state.niches_l2 = []
-if 'selected_l1' not in st.session_state:
-    st.session_state.selected_l1 = None
-if 'selected_niche' not in st.session_state:
-    st.session_state.selected_niche = None
-if 'phase1_state' not in st.session_state:
-    st.session_state.phase1_state = 'input' # input, level1, level2, done
-
-# Phase 1: Market Expansion (Drill-Down)
-st.subheader("Phase 1: Market Expansion")
-
-# Helper to Generate
 def generate_list(prompt_text):
     try:
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        model = genai.GenerativeModel(selected_model_name)
         response = model.generate_content(prompt_text)
         text = response.text.strip()
         if text.startswith("```json"):
@@ -136,65 +168,131 @@ def generate_list(prompt_text):
         st.error(f"Generation Error: {e}")
         return []
 
-# Step 1: Core Market
-if st.session_state.phase1_state == 'input':
-    core_market = st.text_input("Core Market", "Wealth")
-    if st.button("Analyze Market"):
-        if not gemini_key:
-            st.error("Please enter Gemini API Key")
-        else:
-            with st.spinner("Analyzing Market Structure..."):
-                prompt = f"""
-                Act as a market research expert. Break down the market '{core_market}' into 5 distinct, high-level categories.
-                Return ONLY a raw JSON array of strings.
-                Example: ["Real Estate", "Crypto", "Stock Market", "Personal Finance", "Business"]
-                """
-                st.session_state.niches_l1 = generate_list(prompt)
-                st.session_state.phase1_state = 'level1'
-                st.rerun()
+def create_pdf(niche, pain_points, opportunity, moat, prompt):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    
+    # Title
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(200, 10, txt=f"Market Validation Report: {niche}", ln=1, align='C')
+    pdf.ln(10)
+    
+    # Pain Points
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(200, 10, txt="Top Pain Points", ln=1)
+    pdf.set_font("Arial", size=12)
+    pdf.multi_cell(0, 10, txt=pain_points)
+    pdf.ln(5)
+    
+    # Business Idea
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(200, 10, txt="Validated Business Idea", ln=1)
+    pdf.set_font("Arial", size=12)
+    pdf.multi_cell(0, 10, txt=opportunity)
+    pdf.ln(5)
 
-# Step 2: Level 1 Categories
+    # Moat
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(200, 10, txt="Defensible Moat", ln=1)
+    pdf.set_font("Arial", size=12)
+    pdf.multi_cell(0, 10, txt=moat)
+    pdf.ln(5)
+    
+    # Prompt
+    pdf.set_font("Arial", 'B', 14)
+    pdf.cell(200, 10, txt="Lovable Landing Page Prompt", ln=1)
+    pdf.set_font("Arial", 'I', 10)
+    pdf.multi_cell(0, 10, txt=prompt)
+    
+    return pdf.output(dest='S').encode('latin-1')
+
+# -----------------------------------------------------------------------------
+# Main Interface
+# -----------------------------------------------------------------------------
+st.title("Market Validation Engine V2.0")
+st.markdown("---")
+
+# Session Initialization
+if 'niches' not in st.session_state: st.session_state.niches = []
+if 'selected_niche' not in st.session_state: st.session_state.selected_niche = None
+if 'niches_l1' not in st.session_state: st.session_state.niches_l1 = []
+if 'niches_l2' not in st.session_state: st.session_state.niches_l2 = []
+if 'selected_l1' not in st.session_state: st.session_state.selected_l1 = None
+if 'phase1_state' not in st.session_state: st.session_state.phase1_state = 'input'
+
+# -----------------------------------------------------------------------------
+# Phase 1: Market Expansion
+# -----------------------------------------------------------------------------
+st.write('<div class="card">', unsafe_allow_html=True)
+st.subheader("Phase 1: Market Expansion")
+
+if st.session_state.phase1_state == 'input':
+    core_market = st.text_input("Enter Core Market (e.g., 'Wealth', 'Fitness')", "Wealth")
+    if st.button("Analyze Market Structure"):
+        if not gemini_key:
+            st.error("Please configure API Keys.")
+        else:
+            with st.spinner("Consulting Gemini..."):
+                try:
+                    prompt = f"Act as a market expert. Break '{core_market}' into 5 distinct high-level categories. Return ONLY a raw JSON array of strings."
+                    result = generate_list(prompt)
+                    if result:
+                         st.session_state.niches_l1 = result
+                         st.session_state.phase1_state = 'level1'
+                         st.rerun()
+                    else:
+                         st.error("AI returned empty list. Please try again.")
+                except Exception as e:
+                    st.error(f"AI Error: {e}")
+
 elif st.session_state.phase1_state == 'level1':
     st.write("### Step 2: Select a Category")
-    if st.session_state.niches_l1:
+    
+    # UI Safety Check
+    if not st.session_state.get('niches_l1'):
+         st.warning("No categories found. Please try analyzing the market again.")
+         if st.button("Back to Start"):
+             st.session_state.phase1_state = 'input'
+             st.rerun()
+    else:
         selected_cat = st.radio("High-Level Categories:", st.session_state.niches_l1)
-        
-        col1, col2 = st.columns([1, 1])
+        col1, col2 = st.columns([1, 4])
         with col1:
-            if st.button("Explore This Category"):
-                with st.spinner(f"Drilling down into {selected_cat}..."):
-                    prompt = f"""
-                    Generate 5 specific, profitable sub-niches for the category: '{selected_cat}'.
-                    Return ONLY a raw JSON array of strings.
-                    Example: ["Flipping Houses", "Rental Arbitrage", ...]
-                    """
-                    st.session_state.niches_l2 = generate_list(prompt)
-                    st.session_state.selected_l1 = selected_cat
-                    st.session_state.phase1_state = 'level2'
-                    st.rerun()
+            if st.button("Drill Down"):
+                with st.spinner(f"Exploring {selected_cat}..."):
+                    try:
+                        prompt = f"Generate 5 specific, profitable sub-niches for: '{selected_cat}'. Return ONLY a raw JSON array of strings."
+                        result = generate_list(prompt)
+                        if result:
+                            st.session_state.niches_l2 = result
+                            st.session_state.selected_l1 = selected_cat
+                            st.session_state.phase1_state = 'level2'
+                            st.rerun()
+                        else:
+                             st.error("AI returned empty sub-niche list.")
+                    except Exception as e:
+                         st.error(f"AI Error: {e}")
         with col2:
-             if st.button("Reset"):
-                 st.session_state.phase1_state = 'input'
-                 st.rerun()
+            if st.button("Reset Phase"):
+                st.session_state.phase1_state = 'input'
+                st.rerun()
 
-# Step 3: Level 2 Sub-Niches
 elif st.session_state.phase1_state == 'level2':
-    st.write(f"### Step 3: Select a Sub-Niche in '{st.session_state.selected_l1}'")
+    st.write(f"### Step 3: Select Sub-Niche in '{st.session_state.selected_l1}'")
     if st.session_state.niches_l2:
         selected_sub = st.radio("Profitable Sub-Niches:", st.session_state.niches_l2)
-        
-        col1, col2 = st.columns([1, 1])
+        col1, col2 = st.columns([1, 4])
         with col1:
-            if st.button("Lock In This Niche"):
+            if st.button("Lock In Niche"):
                 st.session_state.selected_niche = selected_sub
                 st.session_state.phase1_state = 'done'
                 st.rerun()
         with col2:
-             if st.button("Back"):
-                 st.session_state.phase1_state = 'level1'
-                 st.rerun()
+            if st.button("Back"):
+                st.session_state.phase1_state = 'level1'
+                st.rerun()
 
-# Done State
 elif st.session_state.phase1_state == 'done':
     st.success(f"Final Selection: **{st.session_state.selected_niche}**")
     if st.button("Start Over"):
@@ -202,48 +300,54 @@ elif st.session_state.phase1_state == 'done':
         st.session_state.selected_niche = None
         st.session_state.phase2_complete = False
         st.session_state.phase3_complete = False
+        st.session_state.analysis_complete = False
         st.session_state.snippets = []
         st.rerun()
 
+st.write('</div>', unsafe_allow_html=True)
+
+
+# -----------------------------------------------------------------------------
 # Phase 2: Validation
+# -----------------------------------------------------------------------------
 if st.session_state.selected_niche:
-    st.markdown("---")
-    st.subheader("Phase 2: Validation")
+    st.write('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Phase 2: Trend Validation")
     
-    if st.button("Check Trends"):
+    if st.button("Run Trend Analysis"):
         st.session_state.show_trends = True
 
     if st.session_state.get('show_trends'):
-        with st.spinner("Fetching trends..."):
+        with st.spinner("Fetching Google Trends data..."):
             df = get_trends(st.session_state.selected_niche)
             
         if not df.empty and st.session_state.selected_niche in df.columns:
             st.line_chart(df[st.session_state.selected_niche])
-            st.markdown("### Is this trending up or down?")
-            
-            if st.button("Proceed", key="proceed_phase2"):
+            st.success("Data successfully retrieved.")
+            if st.button("Proceed to Data Mining", key="proceed_phase2"):
                 st.session_state.phase2_complete = True
         else:
-             st.warning("⚠️ Google Trends data unavailable (Google rate limit). Skipping to Reddit analysis...")
+             st.warning("⚠️ Google Trends data unavailable (Rate Limit). Skipping to next phase automatically.")
              st.session_state.phase2_complete = True
-             st.rerun()
-
-# Phase 3: Data Gathering
-if st.session_state.get('phase2_complete'):
-    st.markdown("---")
-    st.subheader("Phase 3: Data Gathering")
     
-    if st.button("Mine Reddit"):
+    st.write('</div>', unsafe_allow_html=True)
+
+
+# -----------------------------------------------------------------------------
+# Phase 3: Data Gathering (Reddit)
+# -----------------------------------------------------------------------------
+if st.session_state.get('phase2_complete'):
+    st.write('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Phase 3: Insight Mining")
+    
+    if st.button("Mine Reddit for Pain Points"):
         if not serpapi_key:
-            st.error("Please provide a SerpApi Key in the sidebar.")
+            st.error("SerpApi Key required.")
         else:
             query = f"{st.session_state.selected_niche} site:reddit.com inurl:comments (struggle OR hate OR nightmare)"
-            st.write(f"Searching: `{query}`")
+            st.info(f"Searching: `{query}`")
             
             progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            status_text.text("Connecting to SerpApi...")
             try:
                 search = GoogleSearch({
                     "q": query,
@@ -252,103 +356,148 @@ if st.session_state.get('phase2_complete'):
                 })
                 results = search.get_dict()
                 progress_bar.progress(50)
-                status_text.text("Extracting snippets...")
                 
                 snippets = []
-                # Combine multiple sources for robustness
-                organic = results.get('organic_results', [])
-                discussions = results.get('discussions_and_forums', [])
-                questions = results.get('related_questions', [])
+                # Robust extraction
+                sources = [results.get('organic_results', []), 
+                           results.get('discussions_and_forums', []), 
+                           results.get('related_questions', [])]
                 
-                all_results = organic + discussions + questions
-                
-                for result in all_results:
-                    if 'snippet' in result:
-                        snippets.append(result['snippet'])
-                    elif 'title' in result: # Fallback to title if snippet missing
-                        snippets.append(result['title'])
+                for source in sources:
+                    for item in source:
+                        if 'snippet' in item: snippets.append(item['snippet'])
+                        elif 'title' in item: snippets.append(item['title'])
                 
                 st.session_state.snippets = snippets
                 progress_bar.progress(100)
-                status_text.text("Done!")
                 
                 if snippets:
                     st.success(f"Found {len(snippets)} insights.")
-                    with st.expander("View Raw Snippets"):
-                        for s in snippets:
-                            st.write(f"- {s}")
+                    with st.expander("View Raw Data"):
+                        for s in snippets: st.write(f"- {s}")
                     st.session_state.phase3_complete = True
                 else:
-                    st.warning("No relevant snippets found.")
+                    st.warning("No relevant snippets found. Try a different niche.")
+                    
             except Exception as e:
-                st.error(f"Search error: {e}")
+                st.error(f"Search failed: {e}")
+    st.write('</div>', unsafe_allow_html=True)
 
-# Phase 4: Processing
+
+# -----------------------------------------------------------------------------
+# Phase 4: Processing & Competitor Loop
+# -----------------------------------------------------------------------------
 if st.session_state.get('phase3_complete'):
-    st.markdown("---")
-    st.subheader("Phase 4: Processing")
+    st.write('<div class="card">', unsafe_allow_html=True)
+    st.subheader("Phase 4: Intelligent Analysis")
     
-    if st.button("Analyze & Build"):
+    if st.button("Analyze & Build Strategy"):
         if not gemini_key:
              st.error("Gemini API Key required.")
         else:
-            with st.spinner("Running Gemini Analysis Chain..."):
+            with st.spinner("Generating Core Analysis..."):
                 try:
-                    model = genai.GenerativeModel('gemini-3-flash-preview')
+                    model = genai.GenerativeModel(selected_model_name)
                     snippets_text = "\n".join(st.session_state.snippets)
                     
-                    # Step 1: Pain Extractor
-                    pain_prompt = f"""
-                    Analyze these Reddit snippets about '{st.session_state.selected_niche}':
-                    {snippets_text}
-                    
-                    Extract 3-5 specific, visceral pain points and direct user quotes.
-                    """
+                    # 1. Pain Points
+                    pain_prompt = f"Analyze these snippets about '{st.session_state.selected_niche}':\n{snippets_text}\nExtract 3 distinct, visceral pain points."
                     pain_response = model.generate_content(pain_prompt)
                     pain_points = pain_response.text
                     
-                    # Step 2: Gap Generator
-                    gap_prompt = f"""
-                    Based on these pain points:
-                    {pain_points}
+                    # 2. Initial Opportunity
+                    opp_prompt = f"Based on these pain points:\n{pain_points}\nGenerate 1 singular, high-potential business opportunity (SaaS, Info Product, or Service)."
+                    opp_response = model.generate_content(opp_prompt)
+                    opportunity = opp_response.text
                     
-                    Generate 3 distinct business opportunities:
-                    1. New Paradigm (A completely different way of solving it)
-                    2. Differentiation (Better features/UX)
-                    3. Tech Angle (AI/Automation solution)
-                    """
-                    gap_response = model.generate_content(gap_prompt)
-                    opportunities = gap_response.text
-                    
-                    # Step 3: Lovable Prompt
-                    lovable_prompt_req = f"""
-                    Take the best opportunity from below:
-                    {opportunities}
-                    
-                    Write a 'Before-After-Bridge' prompt for a Landing Page.
-                    The output should be a single prompt string that I can paste into an AI image/copy generator.
-                    """
-                    lovable_response = model.generate_content(lovable_prompt_req)
-                    final_prompt = lovable_response.text
-                    
-                    st.session_state.analysis_results = {
+                    st.session_state.temp_analysis = {
                         "pain_points": pain_points,
-                        "opportunities": opportunities,
-                        "final_prompt": final_prompt
+                        "opportunity": opportunity
                     }
+                    st.session_state.analysis_step_1 = True
+
                 except Exception as e:
                     st.error(f"Analysis Failed: {e}")
 
-    if st.session_state.get('analysis_results'):
-        results = st.session_state.analysis_results
-        
-        st.markdown("### 1. Pain Points")
-        st.info(results['pain_points'])
-        
-        st.markdown("### 2. Opportunities")
-        st.success(results['opportunities'])
-        
-        st.markdown("### 3. Lovable Prompt")
-        st.code(results['final_prompt'], language="text")
+    # Competitor Loop
+    if st.session_state.get('analysis_step_1'):
+        st.info("Searching for Competitors to validate 'Moat'...")
+        with st.spinner("Checking Competitors..."):
+            try:
+                # Search Competitors
+                opp_summary = st.session_state.temp_analysis['opportunity'][:100] # truncate for query
+                comp_query = f"{opp_summary} competitors alternative"
+                search = GoogleSearch({"q": comp_query, "api_key": serpapi_key, "num": 5})
+                res = search.get_dict()
+                
+                competitors = []
+                if 'organic_results' in res:
+                    for item in res['organic_results']:
+                        competitors.append(f"{item.get('title')}: {item.get('snippet')}")
+                
+                comp_text = "\n".join(competitors)
+                
+                # Refine with Moat
+                refine_prompt = f"""
+                I have this business idea: {st.session_state.temp_analysis['opportunity']}
+                
+                I found these potential competitors:
+                {comp_text}
+                
+                Refine the business idea to have a specific 'Moat' or competitive advantage that solves the pain points better than the competitors.
+                Explain WHY it wins.
+                """
+                
+                model = genai.GenerativeModel(selected_model_name)
+                moat_response = model.generate_content(refine_prompt)
+                moat_analysis = moat_response.text
+                
+                # Lovable Prompt
+                love_prompt = f"Create a 'Before-After-Bridge' copywriting prompt for a landing page for this refined idea:\n{moat_analysis}"
+                love_response = model.generate_content(love_prompt)
+                final_prompt = love_response.text
+                
+                st.session_state.final_results = {
+                    "pain_points": st.session_state.temp_analysis['pain_points'],
+                    "opportunity": st.session_state.temp_analysis['opportunity'],
+                    "moat": moat_analysis,
+                    "prompt": final_prompt
+                }
+                st.session_state.analysis_complete = True
+                
+            except Exception as e:
+                st.error(f"Competitor Loop Failed: {e}")
 
+    # Display Results
+    if st.session_state.get('analysis_complete'):
+        res = st.session_state.final_results
+        
+        st.markdown("### 1. Market Pain")
+        st.success(res['pain_points'])
+        
+        st.markdown("### 2. The Opportunity")
+        st.info(res['opportunity'])
+        
+        st.markdown("### 3. The Moat (Competitor-Proofing)")
+        st.warning(res['moat'])
+        
+        st.markdown("### 4. Landing Page Prompt")
+        st.code(res['prompt'], language="text")
 
+        # PDF Download
+        pdf_bytes = create_pdf(
+            st.session_state.selected_niche,
+            res['pain_points'],
+            res['opportunity'],
+            res['moat'],
+            res['prompt']
+        )
+        
+        st.download_button(
+            label="📄 Download Executive Report",
+            data=pdf_bytes,
+            file_name=f"{st.session_state.selected_niche}_Report.pdf",
+            mime='application/pdf'
+        )
+
+    st.write('</div>', unsafe_allow_html=True)
