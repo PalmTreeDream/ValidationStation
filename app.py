@@ -111,35 +111,15 @@ with st.sidebar:
         genai.configure(api_key=gemini_key)
         
     # Model Selection Logic
-    @st.cache_data
-    def get_available_gemini_model():
-        try:
-            if not gemini_key: return "gemini-1.5-flash" # Fallback
-            
-            models = genai.list_models()
-            available = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
-            
-            # Priority: Flash -> Pro
-            for m in available:
-                if 'flash' in m.lower():
-                    return m
-            for m in available:
-                if 'pro' in m.lower():
-                    return m
-            
-            return available[0] if available else "gemini-1.5-flash"
-        except Exception as e:
-            print(f"Model Discovery Failed: {e}")
-            return "gemini-1.5-flash" # Safe fallback
-
-    selected_model_name = get_available_gemini_model() if gemini_key else "gemini-1.5-flash"
+    # Hardcoded to stable production model as per requirements
+    selected_model_name = "gemini-3-flash-preview"
+    
+    st.caption(f"🤖 Using AI Model: {selected_model_name}")
 
     if st.button("Reset App", type="primary"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
-    
-    st.caption(f"🤖 Using AI Model: {selected_model_name}")
 
 # -----------------------------------------------------------------------------
 # Helper Functions
@@ -153,6 +133,25 @@ def get_trends(keyword):
         return data
     except Exception:
         return pd.DataFrame()
+
+def clean_text(text):
+    """
+    Cleans text to be compatible with latin-1 encoding for FPDF.
+    Replaces common smart quotes/dashes and handles other unicode characters.
+    """
+    if not isinstance(text, str):
+        return str(text)
+        
+    replacements = {
+        '\u2013': '-', '\u2014': '--',
+        '\u2018': "'", '\u2019': "'",
+        '\u201c': '"', '\u201d': '"',
+        '\u2026': '...'
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    # Final safety net: replace any remaining non-latin characters
+    return text.encode('latin-1', 'replace').decode('latin-1')
 
 def generate_list(prompt_text):
     try:
@@ -175,37 +174,37 @@ def create_pdf(niche, pain_points, opportunity, moat, prompt):
     
     # Title
     pdf.set_font("Arial", 'B', 16)
-    pdf.cell(200, 10, txt=f"Market Validation Report: {niche}", ln=1, align='C')
+    pdf.cell(200, 10, txt=clean_text(f"Market Validation Report: {niche}"), ln=1, align='C')
     pdf.ln(10)
     
     # Pain Points
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(200, 10, txt="Top Pain Points", ln=1)
     pdf.set_font("Arial", size=12)
-    pdf.multi_cell(0, 10, txt=pain_points)
+    pdf.multi_cell(0, 10, txt=clean_text(pain_points))
     pdf.ln(5)
     
     # Business Idea
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(200, 10, txt="Validated Business Idea", ln=1)
     pdf.set_font("Arial", size=12)
-    pdf.multi_cell(0, 10, txt=opportunity)
+    pdf.multi_cell(0, 10, txt=clean_text(opportunity))
     pdf.ln(5)
 
     # Moat
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(200, 10, txt="Defensible Moat", ln=1)
     pdf.set_font("Arial", size=12)
-    pdf.multi_cell(0, 10, txt=moat)
+    pdf.multi_cell(0, 10, txt=clean_text(moat))
     pdf.ln(5)
     
     # Prompt
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(200, 10, txt="Lovable Landing Page Prompt", ln=1)
     pdf.set_font("Arial", 'I', 10)
-    pdf.multi_cell(0, 10, txt=prompt)
+    pdf.multi_cell(0, 10, txt=clean_text(prompt))
     
-    return pdf.output(dest='S').encode('latin-1')
+    return pdf.output(dest='S').encode('latin-1', 'replace')
 
 # -----------------------------------------------------------------------------
 # Main Interface
@@ -483,6 +482,8 @@ if st.session_state.get('phase3_complete'):
         
         st.markdown("### 4. Landing Page Prompt")
         st.code(res['prompt'], language="text")
+
+        st.success("Analysis Complete. Download your Executive Report below.")
 
         # PDF Download
         pdf_bytes = create_pdf(
