@@ -1,0 +1,6 @@
+streamlit
+google-generativeai
+google-search-results
+pytrends
+pandas
+matplotlib
