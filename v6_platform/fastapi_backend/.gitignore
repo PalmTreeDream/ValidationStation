@@ -1,0 +1,18 @@
+# Local env files
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.spec
+dist/
+build/
+*.egg-info/
+
+# Vercel
+.vercel

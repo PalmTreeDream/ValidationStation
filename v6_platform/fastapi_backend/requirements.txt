@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+fastapi-users[sqlalchemy]
+pydantic>=2.0
+pydantic-settings
+google-generativeai
+beautifulsoup4
+requests
+python-dotenv
+asyncpg
+greenlet
+email-validator
+fastapi-pagination
+python-multipart
+# Dev/Test (optional)
+pytest
+httpx
